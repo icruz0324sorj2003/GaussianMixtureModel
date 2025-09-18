@@ -35,6 +35,8 @@ class GaussianMixtureModel:
 
         self.gamma = np.zeros(shape = (self.N, self.M))
 
+        self.Z = np.zeros(shape = self.N)
+
         self.N_barra = np.zeros(shape = self.M)
 
         self.X_barra = np.zeros(shape = (self.M, self.D))
@@ -42,6 +44,8 @@ class GaussianMixtureModel:
         self.S_barra = np.zeros(shape = (self.M, self.D, self.D))
 
         self.alpha = np.zeros(shape = self.M)
+
+        self.pi = np.zeros(shape = self.M)
 
         self.tau = np.zeros(shape = self.M)
 
@@ -51,13 +55,9 @@ class GaussianMixtureModel:
 
         self.Phi = np.zeros(shape = (self.M, self.D, self.D))
 
-        self.Psi = np.zeros(shape = (self.M, self.D, self.D))
-
-        self.pi = np.zeros(shape = self.M)
-
-        self.Z = np.zeros(shape = self.N)
-
         self.Sigma = np.zeros(shape = (self.M, self.D, self.D))
+
+        self.Psi = np.zeros(shape = (self.M, self.D, self.D))
 
         self.Lambda = np.zeros(shape = (self.M, self.D, self.D))
 
@@ -101,6 +101,10 @@ class GaussianMixtureModel:
 
         self.gamma = softmax(self.gamma, axis = 1)
 
+    def update_Z(self) -> None:
+
+        self.Z = np.argmax(self.gamma, axis = 1)
+
     def update_N_barra(self) -> None:
 
         self.N_barra = self.gamma.sum(axis = 0)
@@ -122,6 +126,10 @@ class GaussianMixtureModel:
     def update_alpha(self) -> None:
 
         self.alpha = self.alpha_0 + self.N_barra
+
+    def update_pi(self) -> None:
+
+        self.pi = self.alpha/self.alpha.sum()
 
     def update_tau(self) -> None:
 
@@ -149,9 +157,17 @@ class GaussianMixtureModel:
 
         self.Phi += np.expand_dims(self.N_barra, axis = (1, 2))*self.S_barra + self.Lambda_0
 
+    def update_Sigma(self) -> None:
+
+        self.Sigma = self.Phi/(np.expand_dims(self.nu, axis = (1, 2)) + self.D + 1)
+
     def update_Psi(self) -> None:
 
         self.Psi = np.linalg.inv(self.Phi)
+
+    def update_Lambda(self) -> None:
+
+        self.Lambda = np.expand_dims(self.nu, axis = (1, 2))*self.Psi
 
     def update_parameters(self) -> None:
 
@@ -161,6 +177,8 @@ class GaussianMixtureModel:
 
         self.update_gamma()
 
+        self.update_Z()
+
         self.update_N_barra()
 
         self.update_X_barra()
@@ -168,6 +186,8 @@ class GaussianMixtureModel:
         self.update_S_barra()
 
         self.update_alpha()
+
+        self.update_pi()
 
         self.update_tau()
 
@@ -177,35 +197,13 @@ class GaussianMixtureModel:
 
         self.update_Phi()
 
+        self.update_Sigma()
+
         self.update_Psi()
 
-    def estimate_pi(self) -> None:
+        self.update_Lambda()
 
-        self.pi = self.alpha/self.alpha.sum()
-
-    def estimate_Z(self) -> None:
-
-        self.Z = np.argmax(self.gamma, axis = 1)
-
-    def estimate_Sigma(self) -> None:
-
-        self.Sigma = self.Phi/(np.expand_dims(self.nu, axis = (1, 2)) + self.D + 1)
-
-    def estimate_Lambda(self) -> None:
-
-        self.Lambda = np.expand_dims(self.nu, axis = (1, 2))*self.Psi
-
-    def estimate_parameters(self) -> None:
-
-        self.estimate_pi()
-
-        self.estimate_Z()
-
-        self.estimate_Sigma()
-
-        self.estimate_Lambda()
-
-    def iterate_steps(self, MAX : int = 1000, TOL : float = 1e-6) -> None:
+    def estimate_parameters(self, MAX : int = 1000, TOL : float = 1e-6) -> None:
 
         self.initialize_parameters()
 
@@ -222,5 +220,3 @@ class GaussianMixtureModel:
             if self.delta < TOL:
 
                 break
-
-        self.estimate_parameters()
