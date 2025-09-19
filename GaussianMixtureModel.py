@@ -1,11 +1,15 @@
 
 import numpy as np
 
+from scipy.special import gammaln
+from scipy.special import multigammaln
 from scipy.special import psi
 
 from sklearn.cluster import kmeans_plusplus
 
 from scipy.special import softmax
+
+from scipy.stats import wishart
 
 class GaussianMixtureModel:
 
@@ -35,8 +39,6 @@ class GaussianMixtureModel:
 
         self.gamma = np.zeros(shape = (self.N, self.M))
 
-        self.Z = np.zeros(shape = self.N)
-
         self.N_barra = np.zeros(shape = self.M)
 
         self.X_barra = np.zeros(shape = (self.M, self.D))
@@ -44,8 +46,6 @@ class GaussianMixtureModel:
         self.S_barra = np.zeros(shape = (self.M, self.D, self.D))
 
         self.alpha = np.zeros(shape = self.M)
-
-        self.pi = np.zeros(shape = self.M)
 
         self.tau = np.zeros(shape = self.M)
 
@@ -55,13 +55,37 @@ class GaussianMixtureModel:
 
         self.Phi = np.zeros(shape = (self.M, self.D, self.D))
 
-        self.Sigma = np.zeros(shape = (self.M, self.D, self.D))
-
         self.Psi = np.zeros(shape = (self.M, self.D, self.D))
 
-        self.Lambda = np.zeros(shape = (self.M, self.D, self.D))
+        self.E_log_p_pi = 0
+
+        self.E_log_q_pi = 0
+
+        self.E_log_p_Z_mid_pi = 0
+
+        self.E_log_q_Z = 0
+
+        self.E_log_p_mu_mid_Lambda = 0
+
+        self.E_log_q_mu_mid_Lambda = 0
+
+        self.E_log_p_Lambda = 0
+
+        self.E_log_q_Lambda = 0
+
+        self.E_log_p_X_mid_Z_mu_Lambda = 0
+
+        self.ELBO = 0
 
         self.delta = 0
+
+        self.Z = np.zeros(shape = self.N)
+
+        self.pi = np.zeros(shape = self.M)
+
+        self.Sigma = np.zeros(shape = (self.M, self.D, self.D))
+
+        self.Lambda = np.zeros(shape = (self.M, self.D, self.D))
 
     def initialize_parameters(self) -> None:
 
@@ -101,10 +125,6 @@ class GaussianMixtureModel:
 
         self.gamma = softmax(self.gamma, axis = 1)
 
-    def update_Z(self) -> None:
-
-        self.Z = np.argmax(self.gamma, axis = 1)
-
     def update_N_barra(self) -> None:
 
         self.N_barra = self.gamma.sum(axis = 0)
@@ -126,10 +146,6 @@ class GaussianMixtureModel:
     def update_alpha(self) -> None:
 
         self.alpha = self.alpha_0 + self.N_barra
-
-    def update_pi(self) -> None:
-
-        self.pi = self.alpha/self.alpha.sum()
 
     def update_tau(self) -> None:
 
@@ -157,17 +173,9 @@ class GaussianMixtureModel:
 
         self.Phi += np.expand_dims(self.N_barra, axis = (1, 2))*self.S_barra + self.Lambda_0
 
-    def update_Sigma(self) -> None:
-
-        self.Sigma = self.Phi/(np.expand_dims(self.nu, axis = (1, 2)) + self.D + 1)
-
     def update_Psi(self) -> None:
 
         self.Psi = np.linalg.inv(self.Phi)
-
-    def update_Lambda(self) -> None:
-
-        self.Lambda = np.expand_dims(self.nu, axis = (1, 2))*self.Psi
 
     def update_parameters(self) -> None:
 
@@ -177,8 +185,6 @@ class GaussianMixtureModel:
 
         self.update_gamma()
 
-        self.update_Z()
-
         self.update_N_barra()
 
         self.update_X_barra()
@@ -186,8 +192,6 @@ class GaussianMixtureModel:
         self.update_S_barra()
 
         self.update_alpha()
-
-        self.update_pi()
 
         self.update_tau()
 
@@ -197,26 +201,164 @@ class GaussianMixtureModel:
 
         self.update_Phi()
 
-        self.update_Sigma()
-
         self.update_Psi()
 
-        self.update_Lambda()
+    def update_E_log_p_pi(self) -> None:
 
-    def estimate_parameters(self, MAX : int = 1000, TOL : float = 1e-6) -> None:
+        self.E_log_p_pi = (self.alpha_0 - 1)*self.E_log_pi.sum()
+
+        self.E_log_p_pi += gammaln(self.M*self.alpha_0)
+        
+        self.E_log_p_pi -= self.M*gammaln(self.alpha_0)
+
+    def update_E_log_q_pi(self) -> None:
+
+        self.E_log_q_pi = np.sum((self.alpha - 1)*self.E_log_pi)
+
+        self.E_log_q_pi += gammaln(self.alpha.sum())
+
+        self.E_log_q_pi -= gammaln(self.alpha).sum()
+
+    def update_E_log_p_Z_mid_pi(self) -> None:
+
+        self.E_log_p_Z_mid_pi = self.gamma @ self.E_log_pi
+
+        self.E_log_p_Z_mid_pi = self.E_log_p_Z_mid_pi.sum()
+
+    def update_E_log_q_Z(self) -> None:
+
+        self.E_log_q_Z = self.gamma*np.log(self.gamma)
+
+        self.E_log_q_Z = self.E_log_q_Z.sum()
+
+    def update_E_log_p_mu_mid_Lambda(self) -> None:
+
+        self.E_log_p_mu_mid_Lambda = np.einsum('md, mdd, md -> m', self.mu - self.mu_0, self.Psi, self.mu - self.mu_0)
+
+        self.E_log_p_mu_mid_Lambda *= -self.tau_0*self.nu
+
+        self.E_log_p_mu_mid_Lambda += (self.E_log_det_Lambda - self.D*self.tau_0/self.tau)
+
+        self.E_log_p_mu_mid_Lambda += self.D*(np.log(self.tau_0) - np.log(2*np.pi))
+
+        self.E_log_p_mu_mid_Lambda = self.E_log_p_mu_mid_Lambda.sum()/2
+
+    def update_E_log_q_mu_mid_Lambda(self) -> None:
+
+        self.E_log_q_mu_mid_Lambda = (self.E_log_pi - self.D)
+
+        self.E_log_q_mu_mid_Lambda += self.D*(np.log(self.tau) - np.log(2*np.pi))
+
+        self.E_log_q_mu_mid_Lambda = self.E_log_q_mu_mid_Lambda.sum()/2
+
+    def update_E_log_p_Lambda(self) -> None:
+
+        self.E_log_p_Lambda = (self.nu_0 - self.D - 1)/2*self.E_log_det_Lambda
+
+        self.E_log_p_Lambda -= self.nu/2*np.linalg.trace(self.Sigma_0 @ self.Psi)
+
+        self.E_log_p_Lambda -= self.nu_0/2*(np.log(np.linalg.det(self.Lambda_0)) +  self.D*np.log(2))
+
+        self.E_log_p_Lambda -= multigammaln(self.nu_0, self.D)
+
+        self.E_log_p_Lambda = self.E_log_p_Lambda.sum()
+
+    def update_E_log_q_Lambda(self) -> None:
+
+        self.E_log_q_Lambda = (self.nu - self.D - 1)*self.E_log_det_Lambda/2 - self.nu*self.D/2
+
+        self.E_log_q_Lambda -= self.nu*np.log(np.linalg.det(self.Psi))/2 +  self.nu*self.D*np.log(2)/2
+
+        self.E_log_q_Lambda -= multigammaln(self.nu, self.D)
+
+        self.E_log_q_Lambda = self.E_log_q_Lambda.sum()
+
+    def update_E_log_p_X_mid_Z_mu_Lambda(self) -> None:
+
+        self.E_log_p_X_mid_Z_mu_Lambda = np.einsum('mdd, mdd -> m', self.S_barra, self.Psi)
+
+        self.E_log_p_X_mid_Z_mu_Lambda = np.einsum('md, mdd, md -> m', self.X_barra - self.mu, self.Psi, self.X_barra - self.mu)
+
+        self.E_log_p_X_mid_Z_mu_Lambda *= -self.nu
+
+        self.E_log_p_X_mid_Z_mu_Lambda += self.E_log_det_Lambda - self.D/self.tau - self.D*np.log(2*np.pi)
+
+        self.E_log_p_X_mid_Z_mu_Lambda = (self.N_barra/2*self.E_log_p_X_mid_Z_mu_Lambda).sum()
+
+    def update_ELBO(self) -> None:
+
+        self.update_E_log_p_pi()
+
+        self.update_E_log_q_pi()
+
+        self.ELBO = self.E_log_p_pi - self.E_log_q_pi
+
+        self.update_E_log_p_Z_mid_pi()
+
+        self.update_E_log_q_Z()
+
+        self.ELBO += self.E_log_p_Z_mid_pi - self.E_log_q_Z
+
+        self.update_E_log_p_mu_mid_Lambda()
+
+        self.update_E_log_q_mu_mid_Lambda()
+
+        self.ELBO += self.E_log_p_mu_mid_Lambda - self.E_log_q_mu_mid_Lambda
+
+        self.update_E_log_p_Lambda()
+
+        self.update_E_log_q_Lambda()
+
+        self.ELBO += self.E_log_p_Lambda - self.E_log_q_Lambda
+
+        self.update_E_log_p_X_mid_Z_mu_Lambda()
+
+        self.ELBO += self.E_log_p_X_mid_Z_mu_Lambda
+
+    def estimate_Z(self) -> None:
+
+        self.Z = np.argmax(self.gamma, axis = 1)
+
+    def estimate_pi(self) -> None:
+
+        self.pi = self.alpha/self.alpha.sum()
+
+    def estimate_Sigma(self) -> None:
+
+        self.Sigma = self.Phi/(np.expand_dims(self.nu, axis = (1, 2)) + self.D + 1)
+
+    def estimate_Lambda(self) -> None:
+
+        self.Lambda = np.expand_dims(self.nu, axis = (1, 2))*self.Psi
+
+    def estimate_parameters(self) -> None:
+
+        self.estimate_Z()
+
+        self.estimate_pi()
+
+        self.estimate_Sigma()
+
+        self.estimate_Lambda()
+
+    def estimate_model(self, MAX : int = 1000, TOL : float = 1e-6) -> None:
 
         self.initialize_parameters()
 
         for i in range(MAX):
 
-            self.delta = self.mu.copy()
+            self.delta = self.ELBO
 
             self.update_parameters()
 
-            self.delta -= self.mu
+            self.update_ELBO()
 
-            self.delta = np.linalg.norm(self.delta, axis = 1).max()
+            self.delta -= self.ELBO
+
+            self.delta = np.abs(self.delta)
 
             if self.delta < TOL:
 
                 break
+
+        self.estimate_parameters()
